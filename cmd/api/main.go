@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rs/zerolog"
-	internalContext "github.com/tjovicic/golang-template/internal/context"
+	internalApi "github.com/tjovicic/golang-template/internal/api"
 	internalHttp "github.com/tjovicic/golang-template/internal/http"
 	internalLogger "github.com/tjovicic/golang-template/internal/logger"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"os"
 	"os/signal"
@@ -52,7 +50,7 @@ func main() {
 		return
 	}
 
-	s.Router().HandleFunc("/handle", GetHandler(h)).Methods(http.MethodGet)
+	s.Router().HandleFunc("/handle", internalApi.GetHandler(h)).Methods(http.MethodGet)
 
 	gracefulShutdown(env, logger, s, h)
 	if err = s.ListenAndServe(ctx); err != nil {
@@ -79,8 +77,6 @@ func gracefulShutdown(env config, logger zerolog.Logger, s *internalHttp.Server,
 		<-c
 		logger.Info().Msg("received shutdown signal")
 
-		time.Sleep(10 * time.Second)
-
 		shutdownCtx, cancel := shutdownContext(env)
 		defer cancel()
 
@@ -89,24 +85,4 @@ func gracefulShutdown(env config, logger zerolog.Logger, s *internalHttp.Server,
 
 		close(c)
 	}(logger)
-}
-
-func GetHandler(h *internalHttp.Handler) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var (
-			ctx = r.Context()
-			// log = zerolog.Ctx(ctx)
-			id = internalContext.ID(ctx)
-		)
-
-		span := trace.SpanFromContext(ctx)
-		span.SetAttributes(attribute.String("id", id))
-		defer span.End()
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if _, err := w.Write([]byte("hello world")); err != nil {
-			// internalErrors.HandleHTTPError(ctx, err, w, log)
-		}
-	}
 }
