@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rs/zerolog"
-	internalApi "github.com/tjovicic/golang-template/internal/api"
 	internalHttp "github.com/tjovicic/golang-template/internal/http"
 	internalLogger "github.com/tjovicic/golang-template/internal/logger"
 	"net/http"
@@ -50,7 +49,7 @@ func main() {
 		return
 	}
 
-	s.Router().HandleFunc("/handle", internalApi.GetHandler(h)).Methods(http.MethodGet)
+	s.Router().HandleFunc("/handle", GetHandler(h)).Methods(http.MethodGet)
 
 	gracefulShutdown(env, logger, s, h)
 	if err = s.ListenAndServe(ctx); err != nil {

@@ -1,4 +1,4 @@
-package api
+package main
 
 import (
 	internalContext "github.com/tjovicic/golang-template/internal/context"

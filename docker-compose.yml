@@ -23,7 +23,7 @@ services:
     depends_on:
       - postgres-init
       - collector
-    command: go run cmd/api/main.go
+    command: go run ./cmd/api/...
 
   worker:
     container_name: worker
