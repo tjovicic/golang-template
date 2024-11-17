@@ -1,0 +1,13 @@
+[
+  {
+    "id": "1eb89188-28a6-4e67-9cd5-a91a1369fecc",
+    "timestamp": "2023-11-17T17:25:13Z",
+    "temperature": 25.5,
+    "humidity": 45,
+    "pressure": 1013.25,
+    "location": {
+      "latitude": 40.7128,
+      "longitude": -74.0060
+    }
+  }
+]

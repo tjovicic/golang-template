@@ -1,0 +1,167 @@
+services:
+  api:
+    container_name: api
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+    volumes:
+      - ./:/src
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVICE_NAME=golang-template-api
+      - PORT=8080
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=debug
+      - COLLECTOR_URL=collector:4317
+
+      - PG_USER=postgres
+      - PG_PASSWORD=password
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_NAME=postgres
+    depends_on:
+      - postgres-init
+      - collector
+    command: go run cmd/api/main.go
+
+  worker:
+    container_name: worker
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+    volumes:
+      - ./:/src
+    environment:
+      - PROJECT_ID=golang-template
+      - ENVIRONMENT=dev
+      - LOG_LEVEL=debug
+      - COLLECTOR_URL=collector:4317
+
+      - PG_USER=postgres
+      - PG_PASSWORD=password
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_NAME=postgres
+
+      # needed only for dev environment
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+    depends_on:
+      - postgres-init
+      - pubsub-emulator-init
+      - collector
+    command: go run cmd/worker/main.go
+
+  postgres:
+    container_name: postgres
+    image: postgres:15.9
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=password
+
+  postgres-init:
+    container_name: postgres-init
+    image: migrate/migrate:v4.18.1
+    entrypoint: /bin/sh
+    command: >
+        -c "apk add --no-cache postgresql-client
+        && until pg_isready -h postgres ; do sleep 5 ; done
+        && migrate -path=/migrations -database postgresql://postgres:password@postgres:5432/postgres?sslmode=disable up"
+    volumes:
+      - ./migrations:/migrations
+    depends_on:
+      - postgres
+
+  postgres-purge:
+    container_name: postgres-purge
+    image: migrate/migrate:4.18.1
+    entrypoint: /bin/sh
+    command: >
+      -c "apk add --no-cache postgresql-client
+      && until pg_isready -h postgres ; do sleep 5 ; done
+      && migrate -path=/migrations -database postgresql://admin:password@postgres:5432/postgres?sslmode=disable down -all"
+    volumes:
+      - ./migrations:/migrations
+    depends_on:
+      - postgres
+
+  pubsub-emulator:
+    container_name: pubsub-emulator
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:501.0.0-emulators
+    ports:
+      - "8085:8085"
+    environment:
+      - PUBSUB_PROJECT_ID=golang-template
+    command: "gcloud beta emulators pubsub start --project=golang-template --host-port=0.0.0.0:8085"
+
+  pubsub-emulator-init:
+    container_name: pubsub-emulator-init
+    image: alpine:3
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl jq
+
+        # wait until pubsub emulator starts
+        while [[ "$$(curl -s -o /dev/null -w ''%{http_code}'' pubsub-emulator:8085)" != "200" ]]; do printf "emulator not ready, sleeping\n"; sleep 5; done
+
+        # create output topic and subscription
+        curl -s -X PUT http://pubsub-emulator:8085/v1/projects/golang-template/topics/sensor-data
+        printf "\n"
+        curl -s -X PUT http://pubsub-emulator:8085/v1/projects/golang-template/subscriptions/sensor-data-sub -H 'content-type: application/json' --data '{"topic":"projects/golang-template/topics/sensor-data"}'
+        printf "\n"
+
+        /src/scripts/pubsub-emulator-populate.sh /src/scripts/data/sensor-data.json pubsub-emulator sensor-data
+    volumes:
+      - ./:/src
+    depends_on:
+      - pubsub-emulator
+
+  pubsub-emulator-purge:
+    container_name: pubsub-emulator-purge
+    image: alpine:3
+    command:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache curl
+
+        # wait until pubsub emulator starts
+        while [[ "$$(curl -s -o /dev/null -w ''%{http_code}'' pubsub-emulator:8085)" != "200" ]]; do printf "emulator not ready, sleeping\n"; sleep 5; done
+
+        # purge subscription
+        now=$$(date +%Y-%m-%dT%H:%M:%SZ)
+        curl -s -X POST http://pubsub-emulator:8085/v1/projects/golang-template/subscriptions/sensor-data-sub:seek -H 'content-type: application/json' --data '{"time":"'"$$now"'"}'
+    depends_on:
+      - pubsub-emulator
+
+  collector:
+    container_name: collector
+    image: otel/opentelemetry-collector-contrib:0.113.0
+    volumes:
+      - ./configs/:/conf/
+    command:
+      - "--config=/conf/otel-collector.yml"
+    ports:
+      - "8889:8889"
+      - "4317:4317"
+      - "13133:13133"
+    depends_on:
+      - zipkin
+      - prometheus
+
+  zipkin:
+    container_name: zipkin
+    image: bitnami/zipkin:3.4.2
+    ports:
+      - "9411:9411"
+
+  prometheus:
+    container_name: prometheus
+    image: bitnami/prometheus:2.55.1
+    volumes:
+      - ./configs/prometheus.yml:/opt/bitnami/prometheus/conf/prometheus.yml
+    ports:
+      - "9090:9090"
