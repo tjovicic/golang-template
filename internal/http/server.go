@@ -10,6 +10,9 @@ import (
 	"github.com/tjovicic/golang-template/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -91,7 +94,7 @@ func NewServer(ctx context.Context) (*Server, error) {
 	})
 
 	// In case you need a performance boost, consider https://github.com/valyala/fasthttp
-	srv := &http.Server{
+	httpServer := &http.Server{
 		Handler:           http.TimeoutHandler(router, time.Duration(env.HandlerTimeout)*time.Second, "Server timed out"),
 		Addr:              ":" + env.Port,
 		WriteTimeout:      time.Duration(env.WriteTimeout) * time.Second,
@@ -100,14 +103,18 @@ func NewServer(ctx context.Context) (*Server, error) {
 		ReadHeaderTimeout: time.Duration(env.ReadHeaderTimeout) * time.Second,
 	}
 
-	return &Server{
+	server := &Server{
 		config:        env,
 		router:        router,
-		srv:           srv,
+		srv:           httpServer,
 		isHealthy:     true,
 		traceCleanup:  traceCleanup,
 		metricCleanup: metricCleanup,
-	}, nil
+	}
+
+	gracefulServerShutdown(ctx, server)
+
+	return server, nil
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -135,4 +142,19 @@ func (s *Server) Close(ctx context.Context) {
 	if err := s.srv.Shutdown(ctx); err != nil {
 		log.Ctx(ctx).Err(err).Msg("closing server")
 	}
+}
+
+func gracefulServerShutdown(ctx context.Context, server *Server) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-c
+		log.Ctx(ctx).Info().Msg("received server shutdown signal")
+		time.Sleep(5 * time.Second)
+
+		server.Close(ctx)
+
+		close(c)
+	}()
 }

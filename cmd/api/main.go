@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	internalHttp "github.com/tjovicic/golang-template/internal/http"
 	internalLogger "github.com/tjovicic/golang-template/internal/logger"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -53,7 +49,7 @@ func main() {
 
 	s.Router().HandleFunc("/handle", GetHandler(h)).Methods(http.MethodGet)
 
-	gracefulShutdown(ctx, env, s, h)
+	//gracefulShutdown(ctx, env, s, h)
 
 	if err = s.ListenAndServe(ctx); err != nil {
 		logger.Err(err).Msg("starting server")
@@ -64,27 +60,4 @@ func startupContext(env config, logger zerolog.Logger) (context.Context, context
 	ctx, cancel := context.WithTimeout(context.Background(), env.StartupTimeout)
 	ctx = logger.WithContext(ctx)
 	return ctx, cancel
-}
-
-func shutdownContext(env config) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), env.ShutdownTimeout)
-	return ctx, cancel
-}
-
-func gracefulShutdown(ctx context.Context, env config, s *internalHttp.Server, h *internalHttp.Handler) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-c
-		log.Ctx(ctx).Info().Msg("received shutdown signal")
-
-		shutdownCtx, cancel := shutdownContext(env)
-		defer cancel()
-
-		h.Close()
-		s.Close(shutdownCtx)
-
-		close(c)
-	}()
 }
