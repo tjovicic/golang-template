@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/gorilla/mux"
@@ -10,8 +11,10 @@ import (
 	"github.com/tjovicic/golang-template/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime/metrics"
 	"syscall"
 	"time"
 )
@@ -32,11 +35,13 @@ type serverConfig struct {
 	Environment    string `required:"true"`
 	LogLevel       string `default:"info" split_words:"true"`
 
-	HandlerTimeout    int `default:"15" split_words:"true"`
-	WriteTimeout      int `default:"10" split_words:"true"`
 	ReadTimeout       int `default:"5" split_words:"true"`
 	ReadHeaderTimeout int `default:"5" split_words:"true"`
-	IdleTimeout       int `default:"15" split_words:"true"`
+	// WriteTimeout should be changed in case you are doing a cpu profile
+	WriteTimeout int `default:"10" split_words:"true"`
+	// HandlerTimeout should be changed in case you are doing a cpu profile
+	HandlerTimeout int `default:"15" split_words:"true"`
+	IdleTimeout    int `default:"15" split_words:"true"`
 
 	CollectorURL string `required:"true" split_words:"true"`
 }
@@ -75,15 +80,17 @@ func NewServer(ctx context.Context) (*Server, error) {
 	router := mux.NewRouter()
 	router.Use(otelmux.Middleware(env.ServiceName))
 
-	//router.Handle(http.MethodGet, "/debug/pprof/*item", http.DefaultServeMux)
-	//router.HandleFunc("/debug/pprof/", pprof.Index)
-	//router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	//router.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	//router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	//router.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-	//router.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-	//router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
-	//router.Handle("/debug/pprof/block", pprof.Handler("block"))
+	// Add the pprof routes
+	router.HandleFunc("/debug/pprof/", pprof.Index)
+	router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	router.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	router.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	router.Handle("/debug/pprof/block", pprof.Handler("block"))
+	router.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	router.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
 
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +122,40 @@ func NewServer(ctx context.Context) (*Server, error) {
 	gracefulServerShutdown(ctx, server)
 
 	return server, nil
+}
+
+func startAutoProfiler(ctx context.Context) error {
+	memSamples := make([]metrics.Sample, 2)
+	memSamples[0].Name = "/memory/classes/total:bytes"
+	memSamples[1].Name = "/memory/classes/heap/released:bytes"
+
+	profileLimit := cgroupmemlimited.LimitAfterInit * (*autoProfilerPercentageThreshold / 100)
+
+	go func() {
+		ticker := time.NewTicker(*profilerInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metrics.Read(memSamples)
+				inUseMem := memSamples[0].Value.Uint64() - memSamples[1].Value.Uint64()
+
+				if inUseMem > profileLimit {
+					if !limiter.Allow() { // rate limiter
+						continue
+					}
+
+					var buf bytes.Buffer
+					if err := pprof.WriteHeapProfile(&buf); err != nil {
+						continue
+					}
+
+					// Upload the profile to object storage
+				}
+			}
+		}
+	}()
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -151,7 +192,6 @@ func gracefulServerShutdown(ctx context.Context, server *Server) {
 	go func() {
 		<-c
 		log.Ctx(ctx).Info().Msg("received server shutdown signal")
-		time.Sleep(5 * time.Second)
 
 		server.Close(ctx)
 

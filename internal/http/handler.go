@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 type Handler struct {
@@ -60,24 +59,27 @@ func NewHandler(ctx context.Context) (*Handler, error) {
 		return nil, fmt.Errorf("unable to reach database: %v", err)
 	}
 
-	return &Handler{
+	h := &Handler{
 		config:   env,
 		dbClient: dbClient,
-	}, nil
+	}
+
+	gracefulHandlerShutdown(ctx, h)
+
+	return h, nil
 }
 
 func (h *Handler) Close() {
 	h.dbClient.Close()
 }
 
-func (h *Handler) gracefulShutdown(ctx context.Context) {
+func gracefulHandlerShutdown(ctx context.Context, h *Handler) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		<-c
 		log.Ctx(ctx).Info().Msg("received handler shutdown signal")
-		time.Sleep(5 * time.Second)
 
 		h.Close()
 

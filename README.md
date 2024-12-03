@@ -15,3 +15,7 @@ docker compose up api
 ```
 
 ### CPU Profiling
+go tool pprof -seconds 30 -http=:8081 http://localhost:8080/debug/pprof/profile
+
+### Memory Profiling
+go tool pprof -http=:8081 http://localhost:8080/debug/pprof/heap

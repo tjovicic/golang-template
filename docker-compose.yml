@@ -20,6 +20,9 @@ services:
       - PG_HOST=postgres
       - PG_PORT=5432
       - PG_NAME=postgres
+
+      - WRITE_TIMEOUT=60
+      - HANDLER_TIMEOUT=60
     depends_on:
       - postgres-init
       - collector
